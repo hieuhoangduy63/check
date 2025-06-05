@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cấu hình môi trường
+.env
+.venv/
+venv/
+ENV/
+env.bak/
+env/
+
+# VS Code settings
+.vscode/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# File log và tạm
+*.log
+*.tmp
+
+# Hệ điều hành
+.DS_Store
+Thumbs.db
+
+# Cache của pip và pytest
+pip-wheel-metadata/
+*.pytest_cache/
