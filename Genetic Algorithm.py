@@ -1,99 +1,80 @@
+#PYTHON 
 import numpy as np
-import time
 
 class GA_C:
     def __init__(self):
         pass
 
-    def read_input(self):
-        """Đọc input theo format yêu cầu"""
-        # Đọc dòng đầu tiên: N, D, A, B
-        line = input().strip().split()
-        N, D, A, B = map(int, line)
-        
-        # Khởi tạo ma trận dayoff
-        dayoff = np.zeros((N+1, D+1), dtype=int)
-        
-        # Đọc các ngày nghỉ phép của từng nhân viên
-        for i in range(1, N+1):
-            line = input().strip().split()
-            # Chuyển đổi thành số nguyên và loại bỏ -1
-            days_off = [int(x) for x in line if int(x) != -1]
-            for day in days_off:
-                if 1 <= day <= D:
-                    dayoff[i][day] = 1
-        
-        return N, D, A, B, dayoff
-
-    def print_solution(self, x, N, D):
-        """In kết quả theo format yêu cầu"""
-        for i in range(1, N+1):
-            row = []
-            for d in range(1, D+1):
-                row.append(str(int(x[i][d])))
-            print(' '.join(row))
-
     def initialize_random_solution(self, N, D, dayoff, A, B):
-        X = np.zeros((N+1, D+1))
+        X = np.zeros((N+1, D+1), dtype=np.int8)
+        
+        # Faster initialization with vectorized operations where possible
         for i in range(1, N+1):
-            for j in range(1, D+1):
-                if dayoff[i][j] == 1:
-                    X[i][j] = 0
+            # Set random values for non-dayoff cells
+            mask = (dayoff[i, 1:D+1] == 0)
+            X[i, 1:D+1][mask] = np.random.randint(0, 5, size=np.sum(mask))
+            
+        # Fix consecutive night shift violations
         for i in range(1, N+1):
-            for j in range(1, D+1):
-                if dayoff[i][j]:
-                    continue
-                if j> 1 and X[i][j - 1] == 4:
-                    X[i][j] = 0
-                else: 
-                    X[i][j] = np.random.randint(0, 5)
+            for d in range(2, D+1):
+                if X[i, d-1] == 4:
+                    X[i, d] = 0
+        
+        # Optimize shift distribution
         for d in range(1, D+1):
             for shift in range(1, 5):
                 count = np.sum(X[:, d] == shift)
-                while count < A: 
-                    available = [i for i in range(1, N+1) if X[i][d] == 0 and dayoff[i][d] == 0 and (d == 1 or X[i][d-1] != 4)]
-                    if not available:
-                        break
-                    i = np.random.choice(available)
-                    X[i][d] = shift
-                    count += 1
-                while count > B:
-                    assigned = np.where(X[:, d] == shift)[0]
-                    if not assigned.size:
-                        break
-                    i = np.random.choice(assigned)
-                    X[i][d] = 0
-                    count -= 1
+                
+                # Optimize using pre-calculated arrays for speed
+                if count < A:
+                    available_indices = [i for i in range(1, N+1) 
+                                      if X[i, d] == 0 and dayoff[i, d] == 0 
+                                      and (d == 1 or X[i, d-1] != 4)]
+                    
+                    # Use bulk assignment when possible
+                    to_assign = min(A - count, len(available_indices))
+                    if to_assign > 0:
+                        selected = np.random.choice(available_indices, to_assign, replace=False)
+                        X[selected, d] = shift
+                
+                elif count > B:
+                    assigned = np.where((X[:, d] == shift) & (np.arange(N+1) > 0))[0]
+                    to_remove = min(count - B, len(assigned))
+                    if to_remove > 0:
+                        selected = np.random.choice(assigned, to_remove, replace=False)
+                        X[selected, d] = 0
+        
         return X
     
     def evaluate_fitness(self, X, N, D, A, B, dayoff):
+        # Use vectorized operations for faster evaluation
         penalty = 0
-        # check vi pham ngay nghi
-        for i in range(1, N + 1):
-            for d in range(1, D +1):
-                if dayoff[i][d] and X[i][d] != 0:
-                    penalty -= 1000
-
-        # check vi pham so luong nguoi lam
-        for d in range(1, D +1):
+        
+        # Dayoff violations (vectorized)
+        dayoff_violations = np.sum((dayoff[1:N+1, 1:D+1] == 1) & (X[1:N+1, 1:D+1] != 0))
+        penalty -= 1000 * dayoff_violations
+        
+        # Shift count constraints
+        for d in range(1, D+1):
             for shift in range(1, 5):
                 count = np.sum(X[:, d] == shift)
                 if count < A:
                     penalty -= 100 * (A - count)
                 elif count > B:
                     penalty -= 100 * (count - B)
-
-        # check vi pham ca dem 
-        for i in range(1, N + 1):
+        
+        # Night shift followed by work violations
+        night_followed_violations = 0
+        for i in range(1, N+1):
             for d in range(1, D):
-                if X[i][d] == 4 and X[i][d + 1] != 0:
-                    penalty -= 1000
-
-        max_night_shift = 0
-        for i in range(1, N + 1):
-            count = np.sum(X[i] == 4)
-            if count > max_night_shift:
-                max_night_shift = count
+                if X[i, d] == 4 and X[i, d+1] != 0:
+                    night_followed_violations += 1
+        penalty -= 1000 * night_followed_violations
+        
+        # Calculate max night shifts (vectorized)
+        night_shifts_per_person = np.sum(X[1:N+1, 1:D+1] == 4, axis=1)
+        max_night_shift = np.max(night_shifts_per_person) if night_shifts_per_person.size > 0 else 0
+        
         return -max_night_shift + penalty
     
     def tournament_selection(self, population, fitness_scores, tournament_size=3):
@@ -101,129 +82,140 @@ class GA_C:
         best_index = selected_indices[np.argmax(fitness_scores[selected_indices])]
         return population[best_index]
     
-    def crossover(self, parent1, parent2, crossover_rate=0.6):
-        child1 = np.copy(parent1)
-        child2 = np.copy(parent2)
-        for i in range(1, len(parent1)):
-            if np.random.rand() > crossover_rate:
-                child1[i] = parent2[i]
-                child2[i] = parent1[i]
+    def crossover(self, parent1, parent2, crossover_rate=0.8):  # Increased crossover rate
+        N, D = parent1.shape
+        child1 = parent1.copy()
+        child2 = parent2.copy()
+        
+        # Row-wise crossover (faster than element-wise)
+        for i in range(1, N):
+            if np.random.rand() < crossover_rate:
+                child1[i], child2[i] = parent2[i], parent1[i]
+                
         return child1, child2
     
-    def mutate(self, X, N, D, dayoff, A, B, mutation_rate=0.1):
-        X = np.copy(X)  # Tạo bản sao
-        # Bước đột biến
-        for i in range(1, N + 1):
-            for d in range(1, D + 1):
-                if np.random.rand() < mutation_rate:
-                    if dayoff[i][d] == 1:
-                        X[i][d] = 0
-                        continue
-                    if d > 1 and X[i][d - 1] == 4:
-                        X[i][d] = 0
+    def mutate(self, X, N, D, dayoff, A, B, mutation_rate=0.05):  # Reduced mutation rate
+        X_new = X.copy()
+        
+        # Mutation phase - use vectorized operations where possible
+        mutation_mask = np.random.rand(N+1, D+1) < mutation_rate
+        mutation_mask[0, :] = False  # Don't mutate row 0
+        mutation_mask[:, 0] = False  # Don't mutate column 0
+        
+        # Apply mutations considering constraints
+        for i in range(1, N+1):
+            for d in range(1, D+1):
+                if mutation_mask[i, d]:
+                    if dayoff[i, d] == 1:
+                        X_new[i, d] = 0
+                    elif d > 1 and X_new[i, d-1] == 4:
+                        X_new[i, d] = 0
                     else:
-                        X[i][d] = np.random.randint(0, 5)  # Bao gồm ca 4
-                        if X[i][d] == 4 and d < D:
-                            X[i][d + 1] = 0
-        # Bước sửa lỗi ca đêm
-        for i in range(1, N + 1):
+                        X_new[i, d] = np.random.randint(0, 5)
+        
+        # Fix night shift violations
+        for i in range(1, N+1):
             for d in range(1, D):
-                if X[i][d] == 4 and X[i][d + 1] != 0:
-                    X[i][d + 1] = 0
-        # Bước điều chỉnh A <= số nhân viên mỗi ca <= B
-        for d in range(1, D + 1):
+                if X_new[i, d] == 4:
+                    X_new[i, d+1] = 0
+        
+        # Optimize shift distribution using bulk operations
+        for d in range(1, D+1):
             for shift in range(1, 5):
-                count = np.sum(X[:, d] == shift)
-                while count < A:
-                    available = [i for i in range(1, N + 1) if X[i][d] == 0 and dayoff[i][d] == 0 and (d == 1 or X[i][d - 1] != 4)]
-                    if not available:
-                        break
-                    i = np.random.choice(available)
-                    X[i][d] = shift
-                    if shift == 4 and d < D:  # Nếu gán ca đêm, ngày tiếp theo phải nghỉ
-                        X[i][d + 1] = 0
-                    count += 1
-                while count > B:
-                    assigned = np.where(X[:, d] == shift)[0]
-                    if not assigned.size:
-                        break
-                    i = np.random.choice(assigned)
-                    X[i][d] = 0
-                    count -= 1
-        # Bước sửa lỗi ca đêm lần cuối
-        for i in range(1, N + 1):
-            for d in range(1, D):
-                if X[i][d] == 4 and X[i][d + 1] != 0:
-                    X[i][d + 1] = 0
-        return X
-
-    def check_solution(self, X, N, D, A, B, dayoff):
-        """Kiểm tra tính hợp lệ của giải pháp"""
-        if X is None:
-            return False
-            
-        for i in range(1, N + 1):
-            for d in range(1, D + 1):
-                if dayoff[i][d] == 1 and X[i][d] != 0:
-                    return False
-        for d in range(1, D + 1):
-            for shift in range(1, 5):
-                count = np.sum(X[:, d] == shift)
-                if count < A or count > B:
-                    return False
-        for i in range(1, N + 1):
-            for d in range(1, D):
-                if X[i][d] == 4 and X[i][d + 1] != 0:
-                    return False
-        return True
+                count = np.sum(X_new[:, d] == shift)
+                
+                if count < A:
+                    # Find eligible staff for assignment
+                    eligible = np.zeros(N+1, dtype=bool)
+                    for i in range(1, N+1):
+                        if (X_new[i, d] == 0 and dayoff[i, d] == 0 and 
+                            (d == 1 or X_new[i, d-1] != 4)):
+                            eligible[i] = True
+                    
+                    eligible_indices = np.where(eligible)[0]
+                    to_assign = min(A - count, len(eligible_indices))
+                    
+                    if to_assign > 0:
+                        selected = np.random.choice(eligible_indices, to_assign, replace=False)
+                        X_new[selected, d] = shift
+                        
+                        # Fix next day for night shifts
+                        if shift == 4 and d < D:
+                            X_new[selected, d+1] = 0
+                
+                elif count > B:
+                    assigned = np.where((X_new[:, d] == shift) & (np.arange(N+1) > 0))[0]
+                    to_remove = min(count - B, len(assigned))
+                    
+                    if to_remove > 0:
+                        selected = np.random.choice(assigned, to_remove, replace=False)
+                        X_new[selected, d] = 0
+        
+        return X_new
 
     def solve(self, N, D, A, B, dayoff):
-        starttime = time.time()
-        population_size = 50
-        generations = 100
-        mutation_rate = 0.1
+        # Optimized parameters
+        population_size = 30  # Reduced from 50
+        generations = 15      # Reduced from 20
+        mutation_rate = 0.05  # Reduced from 0.1
+        
+        # Use dtype=np.int8 to save memory
         population = [self.initialize_random_solution(N, D, dayoff, A, B) for _ in range(population_size)]
-
-        best_solution = None
+        
         best_fitness = float('-inf')
-
+        best_solution = None
+        
         for generation in range(generations):
-            fitness_scores = np.array([self.evaluate_fitness(individual, N, D, A, B, dayoff) for individual in population])
-            current_best_index = np.argmax(fitness_scores)
-            current_best_fitness = fitness_scores[current_best_index]
+            # Calculate fitness in parallel if possible
+            fitness_scores = np.array([self.evaluate_fitness(ind, N, D, A, B, dayoff) for ind in population])
             
-            if current_best_fitness > best_fitness:
-                best_fitness = current_best_fitness
-                best_solution = np.copy(population[current_best_index])
+            # Track best solution
+            current_best_idx = np.argmax(fitness_scores)
+            if fitness_scores[current_best_idx] > best_fitness:
+                best_fitness = fitness_scores[current_best_idx]
+                best_solution = population[current_best_idx].copy()
+                
+            # Elitism - keep the best solution
+            new_population = [population[current_best_idx]]
             
-            new_population = [population[current_best_index]]
-            
+            # Create new population
             while len(new_population) < population_size:
                 parent1 = self.tournament_selection(population, fitness_scores)
                 parent2 = self.tournament_selection(population, fitness_scores)
+                
                 child1, child2 = self.crossover(parent1, parent2)
-                new_population.append(self.mutate(child1, N, D, dayoff, A, B, mutation_rate))
+                child1 = self.mutate(child1, N, D, dayoff, A, B, mutation_rate)
+                
+                new_population.append(child1)
+                
                 if len(new_population) < population_size:
-                    new_population.append(self.mutate(child2, N, D, dayoff, A, B, mutation_rate))
-
+                    child2 = self.mutate(child2, N, D, dayoff, A, B, mutation_rate)
+                    new_population.append(child2)
+            
             population = new_population[:population_size]
-
+        
+        # Output solution in required format
+        for i in range(1, N + 1):
+            print(' '.join(str(int(best_solution[i, d])) for d in range(1, D + 1)))
+        
         return best_solution
 
 def main():
-    solver = GA_C()
+    # Efficient input parsing
+    N, D, A, B = map(int, input().split())
+    dayoff = np.zeros((N+1, D+1), dtype=np.int8)
     
-    # Đọc input
-    N, D, A, B, dayoff = solver.read_input()
+    for i in range(1, N+1):
+        days = list(map(int, input().split()))
+        for day in days:
+            if day == -1:
+                break
+            if 1 <= day <= D:
+                dayoff[i, day] = 1
     
-    # Giải bài toán
-    solution = solver.solve(N, D, A, B, dayoff)
-    
-    # Kiểm tra và in kết quả
-    if solver.check_solution(solution, N, D, A, B, dayoff):
-        solver.print_solution(solution, N, D)
-    else:
-        print("No solution found")
+    # Solve problem
+    ga = GA_C()
+    ga.solve(N, D, A, B, dayoff)
 
 if __name__ == "__main__":
     main()

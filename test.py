@@ -4,7 +4,86 @@ import time
 
 def solve_staff_rostering(N, D, A, B, days_off):
     model = cp_model.CpModel()
+    def solve_jewelry_robbery(n, weights, values, max_weight):
+
     
+    # Tính giá trị thực tế cho từng option (0, 1, 2, 3 sản phẩm)
+    item_options = []
+    for i in range(n):
+        w, v = weights[i], values[i]
+        options = [
+            (0, 0),  # Không lấy gì
+            (w, v),  # Lấy 1 sản phẩm: 100%
+            (2*w, v + int(v * 0.9)),  # Lấy 2 sản phẩm: 100% + 90%
+            (3*w, v + int(v * 0.9) + int(v * 0.7))  # Lấy 3 sản phẩm: 100% + 90% + 70%
+        ]
+        item_options.append(options)
+    
+    # Dynamic Programming
+    # dp[i][w] = giá trị tối đa với i loại đầu tiên và trọng lượng tối đa w
+    dp = [[0 for _ in range(max_weight + 1)] for _ in range(n + 1)]
+    choice = [[0 for _ in range(max_weight + 1)] for _ in range(n + 1)]
+    
+    # Fill DP table
+    for i in range(1, n + 1):
+        for w in range(max_weight + 1):
+            # Thử từng option cho loại trang sức thứ i-1
+            best_value = dp[i-1][w]
+            best_choice = 0
+            
+            for option_idx in range(4):  # 0, 1, 2, 3 sản phẩm
+                option_weight, option_value = item_options[i-1][option_idx]
+                
+                if option_weight <= w:
+                    total_value = dp[i-1][w - option_weight] + option_value
+                    if total_value > best_value:
+                        best_value = total_value
+                        best_choice = option_idx
+            
+            dp[i][w] = best_value
+            choice[i][w] = best_choice
+    
+    # Backtrack để tìm solution
+    result = [0] * n
+    current_weight = max_weight
+    
+    for i in range(n, 0, -1):
+        chosen_option = choice[i][current_weight]
+        result[i-1] = chosen_option
+        
+        if chosen_option > 0:
+            option_weight = item_options[i-1][chosen_option][0]
+            current_weight -= option_weight
+    
+    return result, dp[n][max_weight]
+
+def parse_input(input_str):
+    """Parse input string theo format của bài toán"""
+    lines = input_str.strip().split('\n')
+    n = int(lines[0])
+    weights = list(map(int, lines[1].split()))
+    values = list(map(int, lines[2].split()))
+    max_weight = int(lines[3])
+    return n, weights, values, max_weight
+
+def format_output(n, result):
+    """Format output theo yêu cầu"""
+    return f"{n}\n{' '.join(map(str, result))}"
+
+# CHƯƠNG TRÌNH CHÍNH - Nhập từ bàn phím
+if __name__ == "__main__":
+    # Đọc input từ bàn phím
+    n = int(input())
+    weights = list(map(int, input().split()))
+    values = list(map(int, input().split()))
+    max_weight = int(input())
+    
+    # Giải bài toán
+    result, max_value = solve_jewelry_robbery(n, weights, values, max_weight)
+    
+    # Output kết quả
+    print(n)
+    print(' '.join(map(str, result)))
     # Create variables
     # x[i,d,s] = 1 if staff i works shift s on day d
     x = {}

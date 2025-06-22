@@ -2,17 +2,14 @@
 import numpy as np
 import time
 
-class Heuristic_C:
+class Two_Phase_Greedy:
     def __init__(self):
         pass
     
     def read_input(self):
-        """Đọc input theo format yêu cầu"""
-        # Đọc dòng đầu tiên: N, D, A, B
         line = input().strip().split()
         N, D, A, B = map(int, line)
         
-        # Khởi tạo ma trận dayoff
         dayoff = np.zeros((N+1, D+1), dtype=int)
         
         # Đọc các ngày nghỉ phép của từng nhân viên
@@ -27,7 +24,6 @@ class Heuristic_C:
         return N, D, A, B, dayoff
     
     def print_solution(self, x, N, D):
-        """In kết quả theo format yêu cầu"""
         for i in range(1, N+1):
             row = []
             for d in range(1, D+1):
@@ -136,12 +132,10 @@ class Heuristic_C:
         return True
 
 def main():
-    solver = Heuristic_C()
-    
-    # Đọc input
+    solver = Two_Phase_Greedy()
+
     N, D, A, B, dayoff = solver.read_input()
     
-    # Giải bài toán
     solution = solver.solve(N, D, A, B, dayoff)
     
     # Kiểm tra và in kết quả
