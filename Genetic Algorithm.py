@@ -1,221 +1,293 @@
 #PYTHON 
 import numpy as np
+import time
+import math
+import random
+import sys
 
-class GA_C:
+class GeneticAlgorithmSolver:
     def __init__(self):
         pass
-
-    def initialize_random_solution(self, N, D, dayoff, A, B):
-        X = np.zeros((N+1, D+1), dtype=np.int8)
-        
-        # Faster initialization with vectorized operations where possible
-        for i in range(1, N+1):
-            # Set random values for non-dayoff cells
-            mask = (dayoff[i, 1:D+1] == 0)
-            X[i, 1:D+1][mask] = np.random.randint(0, 5, size=np.sum(mask))
-            
-        # Fix consecutive night shift violations
-        for i in range(1, N+1):
-            for d in range(2, D+1):
-                if X[i, d-1] == 4:
-                    X[i, d] = 0
-        
-        # Optimize shift distribution
-        for d in range(1, D+1):
-            for shift in range(1, 5):
-                count = np.sum(X[:, d] == shift)
-                
-                # Optimize using pre-calculated arrays for speed
-                if count < A:
-                    available_indices = [i for i in range(1, N+1) 
-                                      if X[i, d] == 0 and dayoff[i, d] == 0 
-                                      and (d == 1 or X[i, d-1] != 4)]
-                    
-                    # Use bulk assignment when possible
-                    to_assign = min(A - count, len(available_indices))
-                    if to_assign > 0:
-                        selected = np.random.choice(available_indices, to_assign, replace=False)
-                        X[selected, d] = shift
-                
-                elif count > B:
-                    assigned = np.where((X[:, d] == shift) & (np.arange(N+1) > 0))[0]
-                    to_remove = min(count - B, len(assigned))
-                    if to_remove > 0:
-                        selected = np.random.choice(assigned, to_remove, replace=False)
-                        X[selected, d] = 0
-        
-        return X
     
-    def evaluate_fitness(self, X, N, D, A, B, dayoff):
-        # Use vectorized operations for faster evaluation
-        penalty = 0
+    def read_input(self):
+        line = input().strip().split()
+        N, D, A, B = map(int, line)
         
-        # Dayoff violations (vectorized)
-        dayoff_violations = np.sum((dayoff[1:N+1, 1:D+1] == 1) & (X[1:N+1, 1:D+1] != 0))
-        penalty -= 1000 * dayoff_violations
-        
-        # Shift count constraints
-        for d in range(1, D+1):
-            for shift in range(1, 5):
-                count = np.sum(X[:, d] == shift)
-                if count < A:
-                    penalty -= 100 * (A - count)
-                elif count > B:
-                    penalty -= 100 * (count - B)
-        
-        # Night shift followed by work violations
-        night_followed_violations = 0
+        dayoff = np.zeros((N+1, D+1), dtype=int)
         for i in range(1, N+1):
-            for d in range(1, D):
-                if X[i, d] == 4 and X[i, d+1] != 0:
-                    night_followed_violations += 1
-        penalty -= 1000 * night_followed_violations
+            line = input().strip().split()
+            days_off = [int(x) for x in line if int(x) != -1]
+            for day in days_off:
+                if 1 <= day <= D:
+                    dayoff[i][day] = 1
         
-        # Calculate max night shifts (vectorized)
-        night_shifts_per_person = np.sum(X[1:N+1, 1:D+1] == 4, axis=1)
-        max_night_shift = np.max(night_shifts_per_person) if night_shifts_per_person.size > 0 else 0
+        return N, D, A, B, dayoff
+    
+    def print_solution(self, x, N, D):
+        for i in range(1, N+1):
+            print(' '.join(str(int(x[i][d])) for d in range(1, D+1)))
+    
+    def initialize_solution(self, N, D, A, B, dayoff):
+        """Khởi tạo nghiệm ban đầu"""
+        x = np.zeros((N+1, D+1), dtype=int)
         
-        return -max_night_shift + penalty
+        for d in range(1, D + 1):
+            # Tìm nhân viên khả dụng
+            available = []
+            for i in range(1, N + 1):
+                if dayoff[i][d] == 0 and (d == 1 or x[i, d-1] != 4):
+                    available.append(i)
+            
+            if len(available) == 0:
+                continue
+            
+            # Phân ca đơn giản
+            shifts_needed = min(4 * A, len(available))
+            random.shuffle(available)
+            
+            shift_idx = 0
+            for i in range(shifts_needed):
+                shift = (shift_idx % 4) + 1
+                x[available[i], d] = shift
+                if (i + 1) % A == 0:
+                    shift_idx += 1
+                    
+                # Nếu ca đêm (ca 4), đảm bảo ngày hôm sau không làm việc
+                if shift == 4 and d < D:
+                    x[available[i], d+1] = 0
+        
+        return x
+    
+    def repair_solution(self, x, N, D, A, B, dayoff):
+        """Sửa chữa các vi phạm ràng buộc"""
+        x = np.copy(x)
+        
+        # Sửa vi phạm ngày nghỉ và ca đêm
+        for i in range(1, N + 1):
+            for d in range(1, D + 1):
+                if dayoff[i][d] == 1:
+                    x[i, d] = 0
+                if d < D and x[i, d] == 4:
+                    x[i, d+1] = 0
+        
+        # Sửa số lượng nhân viên mỗi ca
+        for d in range(1, D + 1):
+            for shift in range(1, 5):
+                count = np.sum(x[:, d] == shift)
+                
+                # Thiếu nhân viên
+                while count < A:
+                    available = [i for i in range(1, N + 1) 
+                               if x[i, d] == 0 and dayoff[i][d] == 0 and 
+                               (d == 1 or x[i, d-1] != 4)]
+                    if not available:
+                        break
+                    
+                    i = min(available, key=lambda i: np.sum(x[i] > 0))  # tìm nhân viên có số ngày làm việc ít nhất
+                    x[i, d] = shift
+                    if shift == 4 and d < D:
+                        x[i, d+1] = 0
+                    count += 1
+                
+                # Thừa nhân viên -> tìm nhân viên có số ngày làm việc nhiều nhất và xoá ca
+                while count > B:
+                    assigned = [i for i in range(1, N + 1) if x[i, d] == shift]
+                    if not assigned:
+                        break
+                    i = max(assigned, key=lambda i: np.sum(x[i] > 0))
+                    x[i, d] = 0
+                    count -= 1
+        
+        return x
+    
+    def evaluate_solution(self, x, N, D, A, B, dayoff):
+        """Tính số ca đêm tối đa và kiểm tra ràng buộc"""
+        night_shifts = [np.sum(x[i] == 4) for i in range(1, N + 1)]  # Số ca đêm của mỗi nhân viên
+        max_nights = max(night_shifts) if night_shifts else 0  # số ca đêm nhiều nhất
+        
+        violations = 0
+        # Vi phạm ngày nghỉ và ca đêm
+        for i in range(1, N + 1):
+            for d in range(1, D + 1):
+                if dayoff[i][d] == 1 and x[i][d] != 0:
+                    violations += 100
+                if d < D and x[i][d] == 4 and x[i][d+1] != 0:
+                    violations += 100
+        
+        # Vi phạm số lượng nhân viên
+        for d in range(1, D + 1):
+            for shift in range(1, 5):
+                count = np.sum(x[:, d] == shift)
+                if count < A:
+                    violations += 10 * (A - count)
+                elif count > B:
+                    violations += 10 * (count - B)
+        
+        return max_nights, violations
     
     def tournament_selection(self, population, fitness_scores, tournament_size=3):
+        """Chọn lọc giải đấu"""
         selected_indices = np.random.choice(len(population), tournament_size, replace=False)
         best_index = selected_indices[np.argmax(fitness_scores[selected_indices])]
         return population[best_index]
     
-    def crossover(self, parent1, parent2, crossover_rate=0.8):  # Increased crossover rate
+    def crossover(self, parent1, parent2, crossover_rate=0.8):
+        """Lai ghép hai nghiệm cha mẹ"""
         N, D = parent1.shape
         child1 = parent1.copy()
         child2 = parent2.copy()
         
-        # Row-wise crossover (faster than element-wise)
+        # Lai ghép theo hàng 
         for i in range(1, N):
             if np.random.rand() < crossover_rate:
                 child1[i], child2[i] = parent2[i], parent1[i]
                 
         return child1, child2
     
-    def mutate(self, X, N, D, dayoff, A, B, mutation_rate=0.05):  # Reduced mutation rate
-        X_new = X.copy()
+    def mutate(self, x, N, D, dayoff, A, B, mutation_rate=0.05):
+        """Đột biến nghiệm"""
+        x_new = x.copy()
         
-        # Mutation phase - use vectorized operations where possible
+        # Giai đoạn đột biến - sử dụng phép toán vector hóa khi có thể
         mutation_mask = np.random.rand(N+1, D+1) < mutation_rate
-        mutation_mask[0, :] = False  # Don't mutate row 0
-        mutation_mask[:, 0] = False  # Don't mutate column 0
+        mutation_mask[0, :] = False  # Không đột biến hàng 0
+        mutation_mask[:, 0] = False  # Không đột biến cột 0
         
-        # Apply mutations considering constraints
+        # Áp dụng đột biến có xem xét các ràng buộc
         for i in range(1, N+1):
             for d in range(1, D+1):
                 if mutation_mask[i, d]:
                     if dayoff[i, d] == 1:
-                        X_new[i, d] = 0
-                    elif d > 1 and X_new[i, d-1] == 4:
-                        X_new[i, d] = 0
+                        x_new[i, d] = 0    #ngày nghỉ phải = 0
+                    elif d > 1 and x_new[i, d-1] == 4:
+                        x_new[i, d] = 0    #sau ca đêm là ngày nghỉ
                     else:
-                        X_new[i, d] = np.random.randint(0, 5)
+                        x_new[i, d] = np.random.randint(0, 5) # Ngẫu nhiên 0-4
         
-        # Fix night shift violations
+        # Sửa chữa vi phạm ca đêm
         for i in range(1, N+1):
             for d in range(1, D):
-                if X_new[i, d] == 4:
-                    X_new[i, d+1] = 0
+                if x_new[i, d] == 4:
+                    x_new[i, d+1] = 0
         
-        # Optimize shift distribution using bulk operations
-        for d in range(1, D+1):
-            for shift in range(1, 5):
-                count = np.sum(X_new[:, d] == shift)
-                
-                if count < A:
-                    # Find eligible staff for assignment
-                    eligible = np.zeros(N+1, dtype=bool)
-                    for i in range(1, N+1):
-                        if (X_new[i, d] == 0 and dayoff[i, d] == 0 and 
-                            (d == 1 or X_new[i, d-1] != 4)):
-                            eligible[i] = True
-                    
-                    eligible_indices = np.where(eligible)[0]
-                    to_assign = min(A - count, len(eligible_indices))
-                    
-                    if to_assign > 0:
-                        selected = np.random.choice(eligible_indices, to_assign, replace=False)
-                        X_new[selected, d] = shift
-                        
-                        # Fix next day for night shifts
-                        if shift == 4 and d < D:
-                            X_new[selected, d+1] = 0
-                
-                elif count > B:
-                    assigned = np.where((X_new[:, d] == shift) & (np.arange(N+1) > 0))[0]
-                    to_remove = min(count - B, len(assigned))
-                    
-                    if to_remove > 0:
-                        selected = np.random.choice(assigned, to_remove, replace=False)
-                        X_new[selected, d] = 0
+        return x_new
+    
+    def solve(self, N, D, A, B, dayoff, time_limit=10):
+        """Giải bằng thuật toán Genetic Algorithm"""
+        start_time = time.time()
+        theoretical_min = math.ceil(D * A / N)
         
-        return X_new
-
-    def solve(self, N, D, A, B, dayoff):
-        # Optimized parameters
-        population_size = 30  # Reduced from 50
-        generations = 15      # Reduced from 20
-        mutation_rate = 0.05  # Reduced from 0.1
+        # Tham số GA
+        population_size = 30  #kích thước quần thể là 30 nghiệm
+        generations = 15   #số lần lặp của quá trình tiến hoá
+        mutation_rate = 0.05
+        crossover_rate = 0.8
         
-        # Use dtype=np.int8 to save memory
-        population = [self.initialize_random_solution(N, D, dayoff, A, B) for _ in range(population_size)]
+        # Khởi tạo quần thể
+        population = []
+        for _ in range(population_size):
+            individual = self.initialize_solution(N, D, A, B, dayoff)
+            if random.random() < 0.3:  # 30% nghiệm được sửa chữa ngay từ đầu
+                individual = self.repair_solution(individual, N, D, A, B, dayoff)
+            population.append(individual)
         
-        best_fitness = float('-inf')
-        best_solution = None
+        best = None
+        best_max_nights = float('inf')
+        best_violations = float('inf')
         
         for generation in range(generations):
-            # Calculate fitness in parallel if possible
-            fitness_scores = np.array([self.evaluate_fitness(ind, N, D, A, B, dayoff) for ind in population])
-            
-            # Track best solution
-            current_best_idx = np.argmax(fitness_scores)
-            if fitness_scores[current_best_idx] > best_fitness:
-                best_fitness = fitness_scores[current_best_idx]
-                best_solution = population[current_best_idx].copy()
+            if time.time() - start_time > time_limit:
+                break
                 
-            # Elitism - keep the best solution
-            new_population = [population[current_best_idx]]
+            # Đánh giá quần thể
+            fitness_scores = []
+            for individual in population:
+                max_nights, violations = self.evaluate_solution(individual, N, D, A, B, dayoff)
+                
+                # Tính fitness: ưu tiên giảm vi phạm trước, sau đó giảm ca đêm
+                if violations == 0:
+                    fitness = 1000 - max_nights  # Nghiệm hợp lệ
+                else:
+                    fitness = -violations  # Nghiệm không hợp lệ
+                
+                fitness_scores.append(fitness)
+                
+                # Cập nhật nghiệm tốt nhất
+                if (violations == 0 and 
+                    (best_violations > 0 or max_nights < best_max_nights)):
+                    best = np.copy(individual)
+                    best_max_nights, best_violations = max_nights, violations
+                    
+                    if best_max_nights <= theoretical_min:  # dừng sớm vì đạt tối ưu
+                        return best
             
-            # Create new population
+            fitness_scores = np.array(fitness_scores)
+            
+            # Ưu tú - giữ lại nghiệm tốt nhất
+            best_idx = np.argmax(fitness_scores)
+            new_population = [population[best_idx]]
+            
+            # Tạo quần thể mới
             while len(new_population) < population_size:
                 parent1 = self.tournament_selection(population, fitness_scores)
                 parent2 = self.tournament_selection(population, fitness_scores)
                 
-                child1, child2 = self.crossover(parent1, parent2)
+                child1, child2 = self.crossover(parent1, parent2, crossover_rate)
                 child1 = self.mutate(child1, N, D, dayoff, A, B, mutation_rate)
+                
+                # Sửa chữa ngẫu nhiên
+                if random.random() < 0.4:
+                    child1 = self.repair_solution(child1, N, D, A, B, dayoff)
                 
                 new_population.append(child1)
                 
                 if len(new_population) < population_size:
                     child2 = self.mutate(child2, N, D, dayoff, A, B, mutation_rate)
+                    
+                    if random.random() < 0.4:
+                        child2 = self.repair_solution(child2, N, D, A, B, dayoff)
+                    
                     new_population.append(child2)
             
             population = new_population[:population_size]
         
-        # Output solution in required format
-        for i in range(1, N + 1):
-            print(' '.join(str(int(best_solution[i, d])) for d in range(1, D + 1)))
+        if best is not None and best_violations > 0:
+            best = self.repair_solution(best, N, D, A, B, dayoff)
         
-        return best_solution
+        return best
+    
+    def check_solution(self, x, N, D, A, B, dayoff):
+        """Kiểm tra tính hợp lệ của lời giải"""
+        if x is None:
+            return False
+            
+        # kiểm tra vi phạm ngày nghỉ
+        for i in range(1, N + 1):
+            for d in range(1, D + 1):
+                if dayoff[i][d] == 1 and x[i][d] != 0:
+                    return False
+                if d < D and x[i][d] == 4 and x[i][d + 1] != 0:
+                    return False
+
+        for d in range(1, D + 1):
+            for shift in range(1, 5):
+                count = np.sum(x[:, d] == shift)
+                if count < A or count > B:
+                    return False
+
+        return True
 
 def main():
-    # Efficient input parsing
-    N, D, A, B = map(int, input().split())
-    dayoff = np.zeros((N+1, D+1), dtype=np.int8)
+    solver = GeneticAlgorithmSolver()
+    N, D, A, B, dayoff = solver.read_input()
     
-    for i in range(1, N+1):
-        days = list(map(int, input().split()))
-        for day in days:
-            if day == -1:
-                break
-            if 1 <= day <= D:
-                dayoff[i, day] = 1
+    time_limit = min(15, max(5, N * D / 500))
+    solution = solver.solve(N, D, A, B, dayoff, time_limit)
     
-    # Solve problem
-    ga = GA_C()
-    ga.solve(N, D, A, B, dayoff)
+    if solver.check_solution(solution, N, D, A, B, dayoff):
+        solver.print_solution(solution, N, D)
+    else:
+        print("No solution found")
 
 if __name__ == "__main__":
     main()
